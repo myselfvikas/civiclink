@@ -1,11 +1,17 @@
+import 'dart:io';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter/services.dart';
+import 'package:sizer/sizer.dart';
 
 import '../../core/app_export.dart';
+import '../../services/auth_service.dart';
+import '../../services/civic_issues_service.dart';
+import '../../services/storage_service.dart';
+import '../../theme/app_theme.dart';
+import '../../widgets/custom_icon_widget.dart';
 import './widgets/camera_preview_widget.dart';
 import './widgets/category_selection_widget.dart';
 import './widgets/description_input_widget.dart';
@@ -14,292 +20,194 @@ import './widgets/location_picker_widget.dart';
 import './widgets/priority_selector_widget.dart';
 
 class ReportIssue extends StatefulWidget {
-  const ReportIssue({Key? key}) : super(key: key);
+  const ReportIssue({super.key});
 
   @override
   State<ReportIssue> createState() => _ReportIssueState();
 }
 
-class _ReportIssueState extends State<ReportIssue> {
-  final ScrollController _scrollController = ScrollController();
+class _ReportIssueState extends State<ReportIssue>
+    with TickerProviderStateMixin {
+  final _formKey = GlobalKey<FormState>();
+  late TabController _tabController;
+  late AnimationController _slideController;
+  late AnimationController _fadeController;
 
-  // Form state
-  XFile? _capturedImage;
-  String? _selectedCategory;
-  String? _selectedPriority;
+  // Form Data
+  String _selectedCategory = '';
+  String _selectedPriority = '';
   String _description = '';
-  LatLng? _currentLocation;
-  String? _detectedAddress;
-  bool _isLocationDetected = false;
+  String _location = '';
+  List<File> _selectedImages = [];
+  List<String> _imageUrls = [];
+  bool _isAnonymous = false;
+  bool _allowPublicView = true;
   bool _isSubmitting = false;
-  bool _hasPermissions = false;
-
-  // AI suggestions mock data
-  Map<String, double>? _aiSuggestions;
 
   @override
   void initState() {
     super.initState();
-    _requestPermissions();
-    _detectLocation();
+    _tabController = TabController(length: 5, vsync: this);
+    _slideController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+    _fadeController = AnimationController(
+      duration: const Duration(milliseconds: 500),
+      vsync: this,
+    );
+
+    _fadeController.forward();
   }
 
   @override
   void dispose() {
-    _scrollController.dispose();
+    _tabController.dispose();
+    _slideController.dispose();
+    _fadeController.dispose();
     super.dispose();
   }
 
-  Future<void> _requestPermissions() async {
-    if (kIsWeb) {
-      setState(() {
-        _hasPermissions = true;
-      });
-      return;
+  void _nextStep() {
+    if (_tabController.index < _tabController.length - 1) {
+      _tabController.animateTo(_tabController.index + 1);
+      HapticFeedback.selectionClick();
+    }
+  }
+
+  void _previousStep() {
+    if (_tabController.index > 0) {
+      _tabController.animateTo(_tabController.index - 1);
+      HapticFeedback.selectionClick();
+    }
+  }
+
+  bool _canProceedFromStep(int step) {
+    switch (step) {
+      case 0:
+        return _selectedCategory.isNotEmpty;
+      case 1:
+        return _selectedPriority.isNotEmpty;
+      case 2:
+        return _description.trim().isNotEmpty && _description.length >= 10;
+      case 3:
+        return _location.isNotEmpty;
+      case 4:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  Future<List<String>> _uploadImages() async {
+    if (_selectedImages.isEmpty) return [];
+
+    List<String> uploadedUrls = [];
+
+    try {
+      for (File imageFile in _selectedImages) {
+        final fileName = StorageService.generateUniqueFileName(
+            imageFile.path.split('/').last);
+        final imageUrl = await StorageService.uploadIssueImage(
+          file: imageFile,
+          fileName: fileName,
+        );
+        uploadedUrls.add(imageUrl);
+      }
+    } catch (e) {
+      throw Exception('Failed to upload images: $e');
     }
 
-    final cameraStatus = await Permission.camera.request();
-    final locationStatus = await Permission.location.request();
-
-    setState(() {
-      _hasPermissions = cameraStatus.isGranted && locationStatus.isGranted;
-    });
+    return uploadedUrls;
   }
 
-  Future<void> _detectLocation() async {
-    // Mock location detection
-    await Future.delayed(Duration(seconds: 2));
-
-    setState(() {
-      _currentLocation =
-          LatLng(37.7749, -122.4194); // San Francisco coordinates
-      _detectedAddress = '123 Market Street, San Francisco, CA 94102';
-      _isLocationDetected = true;
-    });
-  }
-
-  void _onPhotoTaken(XFile photo) {
-    setState(() {
-      _capturedImage = photo;
-    });
-
-    // Simulate AI category suggestion
-    _generateAISuggestions();
-  }
-
-  void _generateAISuggestions() {
-    // Mock AI suggestions based on captured image
-    Future.delayed(Duration(milliseconds: 800), () {
-      if (mounted) {
-        setState(() {
-          _aiSuggestions = {
-            'roads': 0.85,
-            'lighting': 0.12,
-            'traffic': 0.03,
-          };
-        });
-      }
-    });
-  }
-
-  void _onRetakePhoto() {
-    setState(() {
-      _capturedImage = null;
-      _aiSuggestions = null;
-      _selectedCategory = null;
-    });
-  }
-
-  void _onCategorySelected(String category) {
-    setState(() {
-      _selectedCategory = category;
-    });
-  }
-
-  void _onPrioritySelected(String priority) {
-    setState(() {
-      _selectedPriority = priority;
-    });
-  }
-
-  void _onDescriptionChanged(String description) {
-    setState(() {
-      _description = description;
-    });
-  }
-
-  void _onLocationSelected(LatLng location, String address) {
-    setState(() {
-      _currentLocation = location;
-      _detectedAddress = address;
-      _isLocationDetected = true;
-    });
-  }
-
-  bool get _canSubmit {
-    return _capturedImage != null &&
-        _selectedCategory != null &&
-        _description.trim().isNotEmpty &&
-        _selectedPriority != null &&
-        _isLocationDetected;
+  String _getDepartmentForCategory(String category) {
+    switch (category.toLowerCase()) {
+      case 'lighting':
+        return 'Public Works';
+      case 'road_damage':
+        return 'Transportation';
+      case 'garbage':
+        return 'Sanitation';
+      case 'water':
+        return 'Water Department';
+      case 'noise':
+        return 'Code Enforcement';
+      case 'parks':
+        return 'Parks & Recreation';
+      case 'transportation':
+        return 'Transportation';
+      default:
+        return 'General Services';
+    }
   }
 
   Future<void> _submitReport() async {
-    if (!_canSubmit || _isSubmitting) return;
+    if (!_formKey.currentState!.validate()) return;
 
     setState(() {
       _isSubmitting = true;
     });
 
     try {
-      // Simulate API call
-      await Future.delayed(Duration(seconds: 3));
+      // Upload images first
+      final imageUrls = await _uploadImages();
 
-      // Generate tracking number
-      final trackingNumber =
-          'CL${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
+      // Get current user
+      final currentUser = AuthService.currentUser;
+      if (currentUser == null) {
+        throw Exception('User not authenticated');
+      }
 
-      // Show success dialog
-      _showSuccessDialog(trackingNumber);
+      // Create the issue data
+      final issueData = {
+        'title': '$_selectedCategory Issue',
+        'category': _selectedCategory,
+        'priority': _selectedPriority,
+        'description': _description,
+        'location': _location,
+        'imageUrls': imageUrls,
+        'isAnonymous': _isAnonymous,
+        'allowPublicView': _allowPublicView,
+        'reporterId': _isAnonymous ? null : currentUser.uid,
+        'reporterName': _isAnonymous ? 'Anonymous' : currentUser.displayName,
+        'status': 'pending',
+        'department': _getDepartmentForCategory(_selectedCategory),
+        'createdAt': DateTime.now().millisecondsSinceEpoch,
+        'updatedAt': DateTime.now().millisecondsSinceEpoch,
+      };
+
+      // Submit the issue
+      await CivicIssuesService.submitIssue(issueData);
+
+      // Show success message
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Issue reported successfully!'),
+            backgroundColor: AppTheme.successLight,
+          ),
+        );
+
+        // Navigate back
+        Navigator.pop(context);
+      }
     } catch (e) {
-      _showErrorDialog();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to submit issue: $e'),
+            backgroundColor: AppTheme.errorLight,
+          ),
+        );
+      }
     } finally {
-      setState(() {
-        _isSubmitting = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+        });
+      }
     }
-  }
-
-  void _showSuccessDialog(String trackingNumber) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Container(
-              padding: EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: AppTheme.lightTheme.colorScheme.secondary
-                    .withValues(alpha: 0.1),
-                shape: BoxShape.circle,
-              ),
-              child: CustomIconWidget(
-                iconName: 'check_circle',
-                color: AppTheme.lightTheme.colorScheme.secondary,
-                size: 24,
-              ),
-            ),
-            SizedBox(width: 12),
-            Text(
-              'Report Submitted',
-              style: AppTheme.lightTheme.textTheme.titleLarge?.copyWith(
-                color: AppTheme.lightTheme.colorScheme.secondary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Your civic issue report has been successfully submitted and assigned to the appropriate department.',
-              style: AppTheme.lightTheme.textTheme.bodyMedium,
-            ),
-            SizedBox(height: 16),
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppTheme.lightTheme.colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Tracking Number',
-                    style: AppTheme.lightTheme.textTheme.bodySmall?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  SizedBox(height: 4),
-                  Text(
-                    trackingNumber,
-                    style:
-                        AppTheme.dataTextStyleBold(isLight: true, fontSize: 16),
-                  ),
-                ],
-              ),
-            ),
-            SizedBox(height: 12),
-            Row(
-              children: [
-                CustomIconWidget(
-                  iconName: 'schedule',
-                  color: AppTheme.lightTheme.colorScheme.primary,
-                  size: 16,
-                ),
-                SizedBox(width: 6),
-                Text(
-                  'Estimated response: 3-5 business days',
-                  style: AppTheme.lightTheme.textTheme.bodySmall?.copyWith(
-                    color: AppTheme.lightTheme.colorScheme.primary,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              Navigator.pushReplacementNamed(context, '/issue-dashboard');
-            },
-            child: Text('View Dashboard'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              Navigator.pop(context);
-            },
-            child: Text('Done'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showErrorDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            CustomIconWidget(
-              iconName: 'error',
-              color: Color(0xFFEF4444),
-              size: 24,
-            ),
-            SizedBox(width: 12),
-            Text('Submission Failed'),
-          ],
-        ),
-        content: Text(
-          'Unable to submit your report. Please check your internet connection and try again.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('OK'),
-          ),
-        ],
-      ),
-    );
   }
 
   @override
@@ -307,351 +215,388 @@ class _ReportIssueState extends State<ReportIssue> {
     return Scaffold(
       backgroundColor: AppTheme.lightTheme.scaffoldBackgroundColor,
       appBar: AppBar(
-        title: Text('Report Issue'),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         leading: IconButton(
           onPressed: () => Navigator.pop(context),
           icon: CustomIconWidget(
-            iconName: 'close',
-            color: AppTheme.lightTheme.colorScheme.onSurface,
-            size: 24,
+            iconName: 'arrow_back',
+            color: AppTheme.textHighEmphasisLight,
           ),
         ),
-        actions: [
-          if (_canSubmit)
-            TextButton(
-              onPressed: _isSubmitting ? null : _submitReport,
-              child: _isSubmitting
-                  ? SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: AppTheme.lightTheme.colorScheme.primary,
-                      ),
-                    )
-                  : Text(
-                      'Submit',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-            ),
-        ],
+        title: Text(
+          'Report Issue',
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                color: AppTheme.textHighEmphasisLight,
+                fontWeight: FontWeight.w700,
+              ),
+        ),
+        centerTitle: true,
+        bottom: TabBar(
+          controller: _tabController,
+          isScrollable: false,
+          indicatorColor: AppTheme.lightTheme.colorScheme.primary,
+          labelColor: AppTheme.lightTheme.colorScheme.primary,
+          unselectedLabelColor: AppTheme.textMediumEmphasisLight,
+          labelStyle: TextStyle(
+            fontSize: 10.sp,
+            fontWeight: FontWeight.w600,
+          ),
+          unselectedLabelStyle: TextStyle(
+            fontSize: 10.sp,
+            fontWeight: FontWeight.w400,
+          ),
+          tabs: const [
+            Tab(text: 'Category'),
+            Tab(text: 'Priority'),
+            Tab(text: 'Details'),
+            Tab(text: 'Location'),
+            Tab(text: 'Review'),
+          ],
+        ),
       ),
-      body: !_hasPermissions
-          ? _buildPermissionView()
-          : SingleChildScrollView(
-              controller: _scrollController,
-              padding: EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Header
-                  Container(
-                    padding: EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: AppTheme.lightTheme.colorScheme.primary
-                          .withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: AppTheme.lightTheme.colorScheme.primary
-                            .withValues(alpha: 0.3),
+      body: FadeTransition(
+        opacity: _fadeController,
+        child: Form(
+          key: _formKey,
+          child: TabBarView(
+            controller: _tabController,
+            physics: const NeverScrollableScrollPhysics(),
+            children: [
+              // Category Selection
+              CategorySelectionWidget(
+                selectedCategory: _selectedCategory,
+                onCategorySelected: (category) {
+                  setState(() {
+                    _selectedCategory = category;
+                  });
+                },
+              ),
+
+              // Priority Selection
+              PrioritySelectorWidget(
+                selectedPriority: _selectedPriority,
+                onPrioritySelected: (priority) {
+                  setState(() {
+                    _selectedPriority = priority;
+                  });
+                },
+              ),
+
+              // Description Input with Image Selection
+              SingleChildScrollView(
+                padding: EdgeInsets.all(4.w),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    DescriptionInputWidget(
+                      description: _description,
+                      onDescriptionChanged: (description) {
+                        setState(() {
+                          _description = description;
+                        });
+                      },
+                    ),
+                    SizedBox(height: 3.h),
+                    Text(
+                      'Add Photos (Optional)',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                    SizedBox(height: 2.h),
+                    GalleryPickerWidget(
+                      onImageSelected: (image) {
+                        setState(() {
+                          _selectedImages.add(File(image.path));
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              ),
+
+              // Location Picker
+              LocationPickerWidget(
+                onLocationSelected: (location, address) {
+                  setState(() {
+                    _location = address;
+                  });
+                },
+              ),
+
+              // Review & Submit
+              SingleChildScrollView(
+                padding: EdgeInsets.all(4.w),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Review Your Report',
+                      style:
+                          Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                color: AppTheme.textHighEmphasisLight,
+                                fontWeight: FontWeight.w700,
+                              ),
+                    ),
+                    SizedBox(height: 3.h),
+
+                    // Review Cards
+                    _buildReviewCard(
+                        'Category', _selectedCategory, Icons.category),
+                    _buildReviewCard(
+                        'Priority', _selectedPriority, Icons.priority_high),
+                    _buildReviewCard('Location', _location, Icons.location_on),
+                    _buildReviewCard(
+                        'Description', _description, Icons.description),
+                    _buildReviewCard('Images',
+                        '${_selectedImages.length} image(s)', Icons.image),
+
+                    SizedBox(height: 3.h),
+
+                    // Additional Options
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(4.w),
+                      decoration: BoxDecoration(
+                        color: AppTheme.surfaceLight,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: AppTheme.outlineLight,
+                          width: 1,
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Additional Options',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                          SizedBox(height: 2.h),
+                          SwitchListTile(
+                            value: _isAnonymous,
+                            onChanged: (value) {
+                              setState(() {
+                                _isAnonymous = value;
+                              });
+                            },
+                            title: Text('Report Anonymously'),
+                            subtitle: Text(
+                                'Your identity will not be shown publicly'),
+                            contentPadding: EdgeInsets.zero,
+                            activeColor:
+                                AppTheme.lightTheme.colorScheme.primary,
+                          ),
+                          SwitchListTile(
+                            value: _allowPublicView,
+                            onChanged: (value) {
+                              setState(() {
+                                _allowPublicView = value;
+                              });
+                            },
+                            title: Text('Allow Public View'),
+                            subtitle: Text(
+                                'Other citizens can see and support this issue'),
+                            contentPadding: EdgeInsets.zero,
+                            activeColor:
+                                AppTheme.lightTheme.colorScheme.primary,
+                          ),
+                        ],
                       ),
                     ),
-                    child: Row(
-                      children: [
-                        CustomIconWidget(
-                          iconName: 'report_problem',
-                          color: AppTheme.lightTheme.colorScheme.primary,
-                          size: 24,
-                        ),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Report a Civic Issue',
-                                style: AppTheme.lightTheme.textTheme.titleMedium
-                                    ?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                  color:
-                                      AppTheme.lightTheme.colorScheme.primary,
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'Help improve your community by reporting local issues',
-                                style: AppTheme.lightTheme.textTheme.bodySmall
-                                    ?.copyWith(
-                                  color:
-                                      AppTheme.lightTheme.colorScheme.primary,
-                                ),
-                              ),
-                            ],
+
+                    SizedBox(height: 4.h),
+
+                    // Submit Button
+                    SizedBox(
+                      width: double.infinity,
+                      height: 7.h,
+                      child: ElevatedButton(
+                        onPressed: _isSubmitting ? null : _submitReport,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor:
+                              AppTheme.lightTheme.colorScheme.primary,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
                           ),
+                          elevation: 4,
                         ),
-                      ],
+                        child: _isSubmitting
+                            ? Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                          Colors.white),
+                                    ),
+                                  ),
+                                  SizedBox(width: 3.w),
+                                  Text(
+                                    'Submitting...',
+                                    style: TextStyle(
+                                      fontSize: 16.sp,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  CustomIconWidget(
+                                    iconName: 'send',
+                                    color: Colors.white,
+                                    size: 5.w,
+                                  ),
+                                  SizedBox(width: 3.w),
+                                  Text(
+                                    'Submit Issue Report',
+                                    style: TextStyle(
+                                      fontSize: 16.sp,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                      ),
                     ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      bottomNavigationBar: Container(
+        padding: EdgeInsets.all(4.w),
+        decoration: BoxDecoration(
+          color: AppTheme.surfaceLight,
+          boxShadow: [
+            BoxShadow(
+              color: AppTheme.shadowLight,
+              blurRadius: 8,
+              offset: const Offset(0, -2),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            if (_tabController.index > 0)
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _previousStep,
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(
+                      color: AppTheme.lightTheme.colorScheme.primary,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    padding: EdgeInsets.symmetric(vertical: 2.h),
                   ),
-
-                  SizedBox(height: 24),
-
-                  // Camera Section
-                  Text(
-                    'Photo Evidence',
-                    style: AppTheme.lightTheme.textTheme.titleMedium?.copyWith(
+                  child: Text(
+                    'Previous',
+                    style: TextStyle(
+                      color: AppTheme.lightTheme.colorScheme.primary,
+                      fontSize: 14.sp,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                  SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        flex: 3,
-                        child: CameraPreviewWidget(
-                          onPhotoTaken: _onPhotoTaken,
-                          onRetake: _onRetakePhoto,
-                          capturedImage: _capturedImage,
-                        ),
-                      ),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: GalleryPickerWidget(
-                          onImageSelected: _onPhotoTaken,
-                        ),
-                      ),
-                    ],
+                ),
+              ),
+            if (_tabController.index > 0) SizedBox(width: 4.w),
+            if (_tabController.index < _tabController.length - 1)
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: _canProceedFromStep(_tabController.index)
+                      ? _nextStep
+                      : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.lightTheme.colorScheme.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    padding: EdgeInsets.symmetric(vertical: 2.h),
                   ),
-
-                  SizedBox(height: 24),
-
-                  // Category Selection
-                  CategorySelectionWidget(
-                    selectedCategory: _selectedCategory,
-                    onCategorySelected: _onCategorySelected,
-                    aiSuggestions: _aiSuggestions,
-                  ),
-
-                  SizedBox(height: 24),
-
-                  // Description Input
-                  DescriptionInputWidget(
-                    description: _description,
-                    onDescriptionChanged: _onDescriptionChanged,
-                  ),
-
-                  SizedBox(height: 24),
-
-                  // Location Picker
-                  LocationPickerWidget(
-                    currentLocation: _currentLocation,
-                    detectedAddress: _detectedAddress,
-                    onLocationSelected: _onLocationSelected,
-                    isLocationDetected: _isLocationDetected,
-                  ),
-
-                  SizedBox(height: 24),
-
-                  // Priority Selector
-                  PrioritySelectorWidget(
-                    selectedPriority: _selectedPriority,
-                    onPrioritySelected: _onPrioritySelected,
-                  ),
-
-                  SizedBox(height: 32),
-
-                  // Submit Button
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed:
-                          _canSubmit && !_isSubmitting ? _submitReport : null,
-                      style: ElevatedButton.styleFrom(
-                        padding: EdgeInsets.symmetric(vertical: 16),
-                        backgroundColor: _canSubmit
-                            ? AppTheme.lightTheme.colorScheme.primary
-                            : AppTheme.lightTheme.colorScheme.outline,
-                      ),
-                      child: _isSubmitting
-                          ? Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                                SizedBox(width: 12),
-                                Text(
-                                  'Submitting Report...',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ],
-                            )
-                          : Text(
-                              _canSubmit
-                                  ? 'Submit Issue Report'
-                                  : 'Complete Required Fields',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                                color: _canSubmit
-                                    ? Colors.white
-                                    : AppTheme.lightTheme.colorScheme
-                                        .onSurfaceVariant,
-                              ),
-                            ),
+                  child: Text(
+                    'Next',
+                    style: TextStyle(
+                      fontSize: 14.sp,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
-
-                  SizedBox(height: 16),
-
-                  // Progress Indicator
-                  _buildProgressIndicator(),
-
-                  SizedBox(height: 32),
-                ],
+                ),
               ),
-            ),
-    );
-  }
-
-  Widget _buildPermissionView() {
-    return Center(
-      child: Padding(
-        padding: EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CustomIconWidget(
-              iconName: 'security',
-              color: AppTheme.lightTheme.colorScheme.primary,
-              size: 64,
-            ),
-            SizedBox(height: 24),
-            Text(
-              'Permissions Required',
-              style: AppTheme.lightTheme.textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            SizedBox(height: 16),
-            Text(
-              'CivicLink needs camera and location permissions to help you report issues effectively.',
-              style: AppTheme.lightTheme.textTheme.bodyMedium,
-              textAlign: TextAlign.center,
-            ),
-            SizedBox(height: 32),
-            ElevatedButton(
-              onPressed: _requestPermissions,
-              child: Text('Grant Permissions'),
-            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildProgressIndicator() {
-    final steps = [
-      {'name': 'Photo', 'completed': _capturedImage != null},
-      {'name': 'Category', 'completed': _selectedCategory != null},
-      {'name': 'Description', 'completed': _description.trim().isNotEmpty},
-      {'name': 'Location', 'completed': _isLocationDetected},
-      {'name': 'Priority', 'completed': _selectedPriority != null},
-    ];
-
-    final completedSteps =
-        steps.where((step) => step['completed'] as bool).length;
-
+  Widget _buildReviewCard(String title, String value, IconData icon) {
     return Container(
-      padding: EdgeInsets.all(16),
+      margin: EdgeInsets.only(bottom: 2.h),
+      padding: EdgeInsets.all(4.w),
       decoration: BoxDecoration(
-        color: AppTheme.lightTheme.colorScheme.surfaceContainerHighest
-            .withValues(alpha: 0.5),
+        color: AppTheme.surfaceLight,
         borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppTheme.outlineLight,
+          width: 1,
+        ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            children: [
-              CustomIconWidget(
-                iconName: 'checklist',
-                color: AppTheme.lightTheme.colorScheme.primary,
-                size: 16,
-              ),
-              SizedBox(width: 8),
-              Text(
-                'Progress: $completedSteps/${steps.length} steps completed',
-                style: AppTheme.lightTheme.textTheme.bodySmall?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  color: AppTheme.lightTheme.colorScheme.primary,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 12),
-          LinearProgressIndicator(
-            value: completedSteps / steps.length,
-            backgroundColor:
-                AppTheme.lightTheme.colorScheme.outline.withValues(alpha: 0.3),
-            valueColor: AlwaysStoppedAnimation<Color>(
-              AppTheme.lightTheme.colorScheme.primary,
+          Container(
+            padding: EdgeInsets.all(2.w),
+            decoration: BoxDecoration(
+              color: AppTheme.lightTheme.colorScheme.primary
+                  .withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              icon,
+              color: AppTheme.lightTheme.colorScheme.primary,
+              size: 5.w,
             ),
           ),
-          SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            children: steps.map((step) {
-              final isCompleted = step['completed'] as bool;
-              return Container(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: isCompleted
-                      ? AppTheme.lightTheme.colorScheme.secondary
-                          .withValues(alpha: 0.1)
-                      : AppTheme.lightTheme.colorScheme.outline
-                          .withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    CustomIconWidget(
-                      iconName: isCompleted
-                          ? 'check_circle'
-                          : 'radio_button_unchecked',
-                      color: isCompleted
-                          ? AppTheme.lightTheme.colorScheme.secondary
-                          : AppTheme.lightTheme.colorScheme.outline,
-                      size: 12,
-                    ),
-                    SizedBox(width: 4),
-                    Text(
-                      step['name'] as String,
-                      style: AppTheme.lightTheme.textTheme.bodySmall?.copyWith(
-                        fontSize: 10,
-                        color: isCompleted
-                            ? AppTheme.lightTheme.colorScheme.secondary
-                            : AppTheme.lightTheme.colorScheme.outline,
+          SizedBox(width: 3.w),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppTheme.textMediumEmphasisLight,
                         fontWeight: FontWeight.w500,
                       ),
-                    ),
-                  ],
                 ),
-              );
-            }).toList(),
+                SizedBox(height: 0.5.h),
+                Text(
+                  value.isEmpty ? 'Not specified' : value,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: value.isEmpty
+                            ? AppTheme.textDisabledLight
+                            : AppTheme.textHighEmphasisLight,
+                      ),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
           ),
         ],
       ),

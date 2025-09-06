@@ -4,6 +4,7 @@ import 'package:sizer/sizer.dart';
 
 import '../../core/app_export.dart';
 import '../../theme/app_theme.dart';
+import '../../services/auth_service.dart';
 import './widgets/civic_logo_widget.dart';
 import './widgets/government_id_widget.dart';
 import './widgets/login_form_widget.dart';
@@ -20,13 +21,6 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   final ScrollController _scrollController = ScrollController();
 
-  // Mock credentials for testing
-  final Map<String, String> _mockCredentials = {
-    'citizen@civiclink.gov': 'citizen123',
-    'admin@civiclink.gov': 'admin123',
-    'inspector@civiclink.gov': 'inspector123',
-  };
-
   @override
   void dispose() {
     _scrollController.dispose();
@@ -38,36 +32,45 @@ class _LoginScreenState extends State<LoginScreen> {
       _isLoading = true;
     });
 
-    // Simulate network delay
-    await Future.delayed(const Duration(seconds: 2));
+    try {
+      // Use Supabase authentication instead of mock credentials
+      final response = await AuthService.signIn(
+        email: email,
+        password: password,
+      );
 
-    // Check mock credentials
-    if (_mockCredentials.containsKey(email.toLowerCase()) &&
-        _mockCredentials[email.toLowerCase()] == password) {
-      // Success - provide haptic feedback
-      HapticFeedback.lightImpact();
+      if (response.user != null) {
+        // Success - provide haptic feedback
+        HapticFeedback.lightImpact();
 
-      // Show success message
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Login successful! Welcome to CivicLink'),
-            backgroundColor: AppTheme.lightTheme.colorScheme.secondary,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+        // Get user profile to determine role
+        final userProfile = await AuthService.getCurrentUserProfile();
+        final userName = userProfile?.fullName ?? 'User';
 
-        // Navigate to dashboard
-        Navigator.pushReplacementNamed(context, '/issue-dashboard');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Login successful! Welcome back, $userName'),
+              backgroundColor: AppTheme.lightTheme.colorScheme.secondary,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+
+          // Navigate to dashboard
+          Navigator.pushReplacementNamed(context, '/issue-dashboard');
+        }
       }
-    } else {
+    } catch (e) {
       // Error - show specific error message
       if (mounted) {
-        String errorMessage =
-            'Invalid credentials. Please check your email and password.';
+        String errorMessage = 'Login failed. Please check your credentials.';
 
-        if (!_mockCredentials.containsKey(email.toLowerCase())) {
-          errorMessage = 'Account not found. Please verify your email address.';
+        if (e.toString().contains('Invalid login credentials')) {
+          errorMessage = 'Invalid email or password. Please try again.';
+        } else if (e.toString().contains('Email not confirmed')) {
+          errorMessage = 'Please confirm your email address before signing in.';
+        } else if (e.toString().contains('Too many requests')) {
+          errorMessage = 'Too many login attempts. Please try again later.';
         }
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -75,6 +78,7 @@ class _LoginScreenState extends State<LoginScreen> {
             content: Text(errorMessage),
             backgroundColor: AppTheme.lightTheme.colorScheme.error,
             behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -160,6 +164,46 @@ class _LoginScreenState extends State<LoginScreen> {
 
                     // Register Link
                     const RegisterLinkWidget(),
+
+                    // Demo Credentials Info
+                    if (!_isLoading) ...[
+                      SizedBox(height: 3.h),
+                      Container(
+                        padding: EdgeInsets.all(3.w),
+                        decoration: BoxDecoration(
+                          color: AppTheme.lightTheme.colorScheme.surface,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: AppTheme.lightTheme.colorScheme.outline
+                                .withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Demo Accounts:',
+                              style: TextStyle(
+                                fontSize: 12.sp,
+                                fontWeight: FontWeight.w600,
+                                color: AppTheme.textHighEmphasisLight,
+                              ),
+                            ),
+                            SizedBox(height: 1.h),
+                            Text(
+                              '• Citizen: citizen@civiclink.gov / citizen123\n'
+                              '• Admin: admin@civiclink.gov / admin123\n'
+                              '• Inspector: inspector@civiclink.gov / inspector123',
+                              style: TextStyle(
+                                fontSize: 11.sp,
+                                color: AppTheme.textMediumEmphasisLight,
+                                height: 1.4,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
 
                     // Bottom spacing
                     SizedBox(height: 2.h),

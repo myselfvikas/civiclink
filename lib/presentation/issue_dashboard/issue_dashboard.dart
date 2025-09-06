@@ -3,6 +3,8 @@ import 'package:fluttertoast/fluttertoast.dart';
 import 'package:sizer/sizer.dart';
 
 import '../../core/app_export.dart';
+import '../../models/civic_issue.dart';
+import '../../services/civic_issues_service.dart';
 import './widgets/empty_state_widget.dart';
 import './widgets/filter_bottom_sheet_widget.dart';
 import './widgets/filter_chip_widget.dart';
@@ -26,8 +28,8 @@ class _IssueDashboardState extends State<IssueDashboard>
   bool _isLoading = false;
   bool _isLoadingMore = false;
   Map<String, dynamic> _activeFilters = {};
-  List<Map<String, dynamic>> _issues = [];
-  List<Map<String, dynamic>> _filteredIssues = [];
+  List<CivicIssue> _issues = [];
+  List<CivicIssue> _filteredIssues = [];
   String _currentLocation = 'Downtown, Springfield';
   bool _isOffline = false;
   DateTime? _lastUpdated;
@@ -35,9 +37,8 @@ class _IssueDashboardState extends State<IssueDashboard>
   @override
   void initState() {
     super.initState();
-    _loadMockData();
+    _loadIssues();
     _scrollController.addListener(_onScroll);
-    _lastUpdated = DateTime.now();
   }
 
   @override
@@ -46,101 +47,43 @@ class _IssueDashboardState extends State<IssueDashboard>
     super.dispose();
   }
 
-  void _loadMockData() {
-    _issues = [
-      {
-        "id": 1,
-        "title": "Broken streetlight on Main Street",
-        "category": "Lighting",
-        "status": "Pending",
-        "priority": "High",
-        "location": "Main Street & 5th Avenue",
-        "imageUrl":
-            "https://images.pexels.com/photos/1108572/pexels-photo-1108572.jpeg?auto=compress&cs=tinysrgb&w=800",
-        "timestamp": DateTime.now().subtract(Duration(hours: 2)),
-        "description":
-            "The streetlight has been flickering for days and now completely dark.",
-        "department": "Public Works",
-        "votes": 12,
-      },
-      {
-        "id": 2,
-        "title": "Pothole causing traffic issues",
-        "category": "Road Damage",
-        "status": "In Progress",
-        "priority": "Medium",
-        "location": "Oak Street near City Hall",
-        "imageUrl":
-            "https://images.pexels.com/photos/1108101/pexels-photo-1108101.jpeg?auto=compress&cs=tinysrgb&w=800",
-        "timestamp": DateTime.now().subtract(Duration(hours: 5)),
-        "description":
-            "Large pothole is causing vehicles to swerve dangerously.",
-        "department": "Transportation",
-        "votes": 8,
-      },
-      {
-        "id": 3,
-        "title": "Overflowing garbage bins in Central Park",
-        "category": "Garbage",
-        "status": "Resolved",
-        "priority": "Low",
-        "location": "Central Park - East Entrance",
-        "imageUrl":
-            "https://images.pexels.com/photos/2827392/pexels-photo-2827392.jpeg?auto=compress&cs=tinysrgb&w=800",
-        "timestamp": DateTime.now().subtract(Duration(days: 1)),
-        "description":
-            "Multiple garbage bins are overflowing, attracting pests.",
-        "department": "Sanitation",
-        "votes": 15,
-      },
-      {
-        "id": 4,
-        "title": "Water leak near bus stop",
-        "category": "Water",
-        "status": "Pending",
-        "priority": "High",
-        "location": "Bus Stop #42 - Elm Street",
-        "imageUrl":
-            "https://images.pexels.com/photos/1108099/pexels-photo-1108099.jpeg?auto=compress&cs=tinysrgb&w=800",
-        "timestamp": DateTime.now().subtract(Duration(hours: 8)),
-        "description":
-            "Continuous water leak creating puddles and potential hazard.",
-        "department": "Water Department",
-        "votes": 6,
-      },
-      {
-        "id": 5,
-        "title": "Excessive noise from construction site",
-        "category": "Noise",
-        "status": "In Progress",
-        "priority": "Medium",
-        "location": "Construction Site - Pine Avenue",
-        "imageUrl":
-            "https://images.pexels.com/photos/1108117/pexels-photo-1108117.jpeg?auto=compress&cs=tinysrgb&w=800",
-        "timestamp": DateTime.now().subtract(Duration(hours: 12)),
-        "description":
-            "Construction noise exceeding permitted hours and decibel levels.",
-        "department": "Code Enforcement",
-        "votes": 9,
-      },
-      {
-        "id": 6,
-        "title": "Damaged playground equipment",
-        "category": "Parks",
-        "status": "Pending",
-        "priority": "High",
-        "location": "Riverside Park - Playground Area",
-        "imageUrl":
-            "https://images.pexels.com/photos/1108101/pexels-photo-1108101.jpeg?auto=compress&cs=tinysrgb&w=800",
-        "timestamp": DateTime.now().subtract(Duration(days: 2)),
-        "description":
-            "Swing set has broken chains, creating safety hazard for children.",
-        "department": "Parks & Recreation",
-        "votes": 18,
-      },
-    ];
+  Future<void> _loadIssues() async {
+    setState(() {
+      _isLoading = true;
+    });
 
-    _applyFilters();
+    try {
+      final issues = await CivicIssuesService.getIssues(
+        status: _activeFilters['status'],
+        category: _activeFilters['issueType'],
+        priority: _activeFilters['priority'],
+        limit: 50,
+      );
+
+      setState(() {
+        _issues = issues;
+        _lastUpdated = DateTime.now();
+        _isOffline = false;
+      });
+
+      _applyFilters();
+    } catch (e) {
+      setState(() {
+        _isOffline = true;
+      });
+
+      if (mounted) {
+        Fluttertoast.showToast(
+          msg: "Failed to load issues. Please check your connection.",
+          toastLength: Toast.LENGTH_SHORT,
+          gravity: ToastGravity.BOTTOM,
+        );
+      }
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   void _onScroll() {
@@ -157,32 +100,44 @@ class _IssueDashboardState extends State<IssueDashboard>
       _isLoadingMore = true;
     });
 
-    // Simulate loading more data
-    await Future.delayed(Duration(seconds: 2));
+    try {
+      // Load more issues with offset
+      final moreIssues = await CivicIssuesService.getIssues(
+        status: _activeFilters['status'],
+        category: _activeFilters['issueType'],
+        priority: _activeFilters['priority'],
+        limit: 20,
+        offset: _issues.length,
+      );
 
-    setState(() {
-      _isLoadingMore = false;
-    });
+      setState(() {
+        _issues.addAll(moreIssues);
+      });
+
+      _applyFilters();
+    } catch (e) {
+      Fluttertoast.showToast(
+        msg: "Failed to load more issues",
+        toastLength: Toast.LENGTH_SHORT,
+        gravity: ToastGravity.BOTTOM,
+      );
+    } finally {
+      setState(() {
+        _isLoadingMore = false;
+      });
+    }
   }
 
   Future<void> _refreshData() async {
-    setState(() {
-      _isLoading = true;
-    });
+    await _loadIssues();
 
-    // Simulate refresh
-    await Future.delayed(Duration(seconds: 1));
-
-    setState(() {
-      _isLoading = false;
-      _lastUpdated = DateTime.now();
-    });
-
-    Fluttertoast.showToast(
-      msg: "Issues updated",
-      toastLength: Toast.LENGTH_SHORT,
-      gravity: ToastGravity.BOTTOM,
-    );
+    if (mounted) {
+      Fluttertoast.showToast(
+        msg: "Issues updated",
+        toastLength: Toast.LENGTH_SHORT,
+        gravity: ToastGravity.BOTTOM,
+      );
+    }
   }
 
   void _applyFilters() {
@@ -190,7 +145,7 @@ class _IssueDashboardState extends State<IssueDashboard>
       _filteredIssues = _issues.where((issue) {
         // Filter by issue type
         if (_activeFilters['issueType'] != null) {
-          if ((issue['category'] as String).toLowerCase() !=
+          if (issue.category.toLowerCase() !=
               (_activeFilters['issueType'] as String).toLowerCase()) {
             return false;
           }
@@ -198,8 +153,16 @@ class _IssueDashboardState extends State<IssueDashboard>
 
         // Filter by status
         if (_activeFilters['status'] != null) {
-          if ((issue['status'] as String).toLowerCase() !=
+          if (issue.status.toLowerCase() !=
               (_activeFilters['status'] as String).toLowerCase()) {
+            return false;
+          }
+        }
+
+        // Filter by priority
+        if (_activeFilters['priority'] != null) {
+          if (issue.priority.toLowerCase() !=
+              (_activeFilters['priority'] as String).toLowerCase()) {
             return false;
           }
         }
@@ -207,7 +170,7 @@ class _IssueDashboardState extends State<IssueDashboard>
         // Filter by date range
         if (_activeFilters['dateRange'] != null) {
           final now = DateTime.now();
-          final issueDate = issue['timestamp'] as DateTime;
+          final issueDate = issue.createdAt;
 
           switch (_activeFilters['dateRange'] as String) {
             case 'Today':
@@ -278,6 +241,25 @@ class _IssueDashboardState extends State<IssueDashboard>
       case 3:
         Navigator.pushNamed(context, '/user-profile');
         break;
+    }
+  }
+
+  Future<void> _handleVote(String issueId, bool hasVoted) async {
+    try {
+      if (hasVoted) {
+        await CivicIssuesService.removeVoteFromIssue(issueId);
+      } else {
+        await CivicIssuesService.voteOnIssue(issueId);
+      }
+
+      // Refresh the issue list to show updated vote count
+      await _refreshData();
+    } catch (e) {
+      Fluttertoast.showToast(
+        msg: "Failed to update vote. Please try again.",
+        toastLength: Toast.LENGTH_SHORT,
+        gravity: ToastGravity.BOTTOM,
+      );
     }
   }
 
@@ -460,7 +442,8 @@ class _IssueDashboardState extends State<IssueDashboard>
 
                           final issue = _filteredIssues[index];
                           return IssueCardWidget(
-                            issue: issue,
+                            issue: issue
+                                .toJson(), // Convert to Map for compatibility
                             onTap: () {
                               // Navigate to issue detail with shared element transition
                               Fluttertoast.showToast(
@@ -506,7 +489,8 @@ class _IssueDashboardState extends State<IssueDashboard>
                             },
                             onContactDepartment: () {
                               Fluttertoast.showToast(
-                                msg: "Contacting ${issue['department']}...",
+                                msg:
+                                    "Contacting ${issue.department ?? 'Department'}...",
                                 toastLength: Toast.LENGTH_SHORT,
                                 gravity: ToastGravity.BOTTOM,
                               );
