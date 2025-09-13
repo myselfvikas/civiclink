@@ -16,15 +16,19 @@ class AuthService {
       final response = await _supabaseService.client.auth.signUp(
         email: email,
         password: password,
-        data: {
-          'full_name': fullName,
-          'role': role,
-        },
       );
 
-      if (response.user == null) {
+      final user = response.user;
+      if (user == null) {
         throw Exception('Sign up failed');
       }
+
+      // Insert into user_profiles (if trigger doesn’t already do this)
+      await _supabaseService.client.from('user_profiles').insert({
+        'id': user.id,
+        'full_name': fullName,
+        'role': role,
+      });
 
       return response;
     } catch (e) {
@@ -97,69 +101,3 @@ class AuthService {
     String? address,
     String? governmentId,
     String? profileImageUrl,
-  }) async {
-    try {
-      final user = getCurrentUser();
-      if (user == null) {
-        throw Exception('User not authenticated');
-      }
-
-      final updateData = <String, dynamic>{
-        'full_name': fullName,
-      };
-
-      if (phone != null) updateData['phone'] = phone;
-      if (address != null) updateData['address'] = address;
-      if (governmentId != null) updateData['government_id'] = governmentId;
-      if (profileImageUrl != null)
-        updateData['profile_image_url'] = profileImageUrl;
-
-      final response = await _supabaseService.client
-          .from('user_profiles')
-          .update(updateData)
-          .eq('id', user.id)
-          .select()
-          .single();
-
-      return UserProfile.fromJson(response);
-    } catch (e) {
-      throw Exception('Failed to update profile: $e');
-    }
-  }
-
-  /// Reset password
-  static Future<void> resetPassword({required String email}) async {
-    try {
-      await _supabaseService.client.auth.resetPasswordForEmail(email);
-    } catch (e) {
-      throw Exception('Password reset failed: $e');
-    }
-  }
-
-  /// Listen to auth state changes
-  static Stream<AuthState> get authStateChanges {
-    return _supabaseService.client.auth.onAuthStateChange;
-  }
-
-  /// Check if user has admin privileges
-  static Future<bool> isUserAdmin() async {
-    try {
-      final profile = await getCurrentUserProfile();
-      return profile?.role == 'admin' ||
-          profile?.role == 'inspector' ||
-          profile?.role == 'government_official';
-    } catch (e) {
-      return false;
-    }
-  }
-
-  /// Get user role
-  static Future<String> getUserRole() async {
-    try {
-      final profile = await getCurrentUserProfile();
-      return profile?.role ?? 'citizen';
-    } catch (e) {
-      return 'citizen';
-    }
-  }
-}
